@@ -23,23 +23,46 @@ sudo -u ubuntu bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
 # Clone TARA into the default user's home dir
 sudo -u ubuntu git clone ${tara_repo_url} /home/ubuntu/tara
 
-# Pre-download the model weights (Whisper, Helsinki-NLP translation, Piper
-# voice) so the first real pipeline run doesn't pay for it. Uses `uv run
-# --with` instead of the repo's pyproject.toml, since that file may not yet
-# reflect deps only synced over scp (not committed) at this point.
-cat > /home/ubuntu/tara/warmup_models.py <<'PYEOF'
-import whisper
-whisper.load_model("base")
+# Run the web app as a systemd service - starts on boot, restarts on crash,
+# keeps running regardless of SSH sessions. Depends on `server/` actually
+# being in the git-cloned repo (i.e. committed), so this only takes effect
+# once that's pushed - harmless no-op attempt on older commits otherwise.
+cat > /etc/systemd/system/tara.service <<'UNITEOF'
+[Unit]
+Description=TARA web app
+After=network.target
 
-from transformers import MarianMTModel, MarianTokenizer
-MarianTokenizer.from_pretrained("Helsinki-NLP/opus-mt-de-en")
-MarianMTModel.from_pretrained("Helsinki-NLP/opus-mt-de-en")
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/tara
+ExecStartPre=/bin/rm -f /home/ubuntu/tara/uv.lock
+ExecStartPre=/home/ubuntu/.local/bin/uv sync
+ExecStart=/home/ubuntu/.local/bin/uv run uvicorn server.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
 
-from huggingface_hub import hf_hub_download
-hf_hub_download(repo_id="rhasspy/piper-voices", filename="en/en_US/lessac/medium/en_US-lessac-medium.onnx")
-hf_hub_download(repo_id="rhasspy/piper-voices", filename="en/en_US/lessac/medium/en_US-lessac-medium.onnx.json")
-PYEOF
-chown ubuntu:ubuntu /home/ubuntu/tara/warmup_models.py
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+systemctl daemon-reload
+systemctl enable --now tara.service || true
 
-sudo -u ubuntu bash -c "cd /home/ubuntu/tara && /home/ubuntu/.local/bin/uv run --python 3.12 --with torch --with openai-whisper --with transformers --with sentencepiece --with piper-tts --with huggingface-hub python warmup_models.py"
-rm /home/ubuntu/tara/warmup_models.py
+# Caddy - reverse proxies to the app and gets a real Let's Encrypt cert
+# automatically, using nip.io (resolves <ip>.nip.io -> that literal IP) so
+# no owned domain is needed. Query our own public IP via instance metadata
+# since it's different for every instance.
+apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+apt update
+apt install -y caddy
+
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+NIP_DOMAIN="$(echo "$PUBLIC_IP" | tr '.' '-').nip.io"
+
+cat > /etc/caddy/Caddyfile <<CADDYEOF
+$NIP_DOMAIN {
+    reverse_proxy localhost:8000
+}
+CADDYEOF
+systemctl reload caddy || true

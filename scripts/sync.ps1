@@ -11,7 +11,7 @@ try {
 }
 
 $repoRoot = "$PSScriptRoot\.."
-$items = @("asr", "translation", "tts", "pipeline", "main.py", "pyproject.toml", ".python-version")
+$items = @("asr", "translation", "tts", "pipeline", "server", "main.py", "pyproject.toml", ".python-version")
 
 foreach ($item in $items) {
     $localPath = Join-Path $repoRoot $item

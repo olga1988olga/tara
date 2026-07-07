@@ -38,6 +38,27 @@ resource "aws_security_group" "tara" {
     cidr_blocks = ["${chomp(data.http.my_ip.response_body)}/32"]
   }
 
+  # 443 (not 8000) - Caddy terminates TLS here and reverse-proxies to the
+  # app internally; uvicorn itself is not exposed. Restricted to your IP -
+  # this is where the actual app lives.
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["${chomp(data.http.my_ip.response_body)}/32"]
+  }
+
+  # 80 open to everyone (not IP-restricted) - required for Let's Encrypt's
+  # ACME HTTP-01 challenge/renewal, which connects from its own servers, not
+  # yours. Only ever serves ACME challenges + a redirect to HTTPS, nothing
+  # sensitive, so this is safe to leave open.
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -73,4 +94,8 @@ resource "aws_instance" "tara" {
 
 output "public_ip" {
   value = aws_instance.tara.public_ip
+}
+
+output "instance_id" {
+  value = aws_instance.tara.id
 }

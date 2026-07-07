@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TARA</title>
+<style>
+  body { font-family: sans-serif; max-width: 480px; margin: 4rem auto; text-align: center; }
+  button { font-size: 1.1rem; padding: 0.6rem 1.4rem; margin: 0.5rem; }
+  #status { margin-top: 1rem; color: #555; }
+  #transcript, #translation { margin-top: 1rem; text-align: left; }
+  #transcript span, #translation span { font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>TARA</h1>
+<p>Record a snippet, get it back translated.</p>
+<div>
+  <label for="modelSelect">Translation model:</label><br>
+  <select id="modelSelect" style="width: 100%; box-sizing: border-box; margin-top: 0.3rem;"></select>
+</div>
+<div style="margin-top: 0.8rem;">
+  <label for="targetLangSelect">Target language:</label><br>
+  <select id="targetLangSelect" style="width: 100%; box-sizing: border-box; margin-top: 0.3rem;"></select>
+</div>
+<button id="recordBtn" style="margin-top: 1rem;">Record</button>
+<div id="status"></div>
+<p id="transcript"></p>
+<p id="translation"></p>
+<audio id="player" controls style="margin-top: 1.5rem; width: 100%;"></audio>
+
+<script>
+const recordBtn = document.getElementById("recordBtn");
+const statusEl = document.getElementById("status");
+const player = document.getElementById("player");
+const transcriptEl = document.getElementById("transcript");
+const translationEl = document.getElementById("translation");
+
+let mediaRecorder;
+let chunks = [];
+let recording = false;
+
+const modelSelect = document.getElementById("modelSelect");
+fetch("/models")
+  .then((r) => r.json())
+  .then((names) => {
+    modelSelect.innerHTML = names.map((n) => `<option value="${n}">${n}</option>`).join("");
+  });
+
+const targetLangSelect = document.getElementById("targetLangSelect");
+fetch("/target-languages")
+  .then((r) => r.json())
+  .then((codes) => {
+    targetLangSelect.innerHTML = codes.map((c) => `<option value="${c}">${c}</option>`).join("");
+  });
+
+recordBtn.addEventListener("click", async () => {
+  if (!recording) {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    chunks = [];
+    mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+    mediaRecorder.onstop = onRecordingStopped;
+    mediaRecorder.start();
+    recording = true;
+    recordBtn.textContent = "Stop";
+    statusEl.textContent = "Recording...";
+  } else {
+    mediaRecorder.stop();
+    recording = false;
+    recordBtn.textContent = "Record";
+  }
+});
+
+async function onRecordingStopped() {
+  statusEl.textContent = "Translating...";
+  const blob = new Blob(chunks, { type: "audio/webm" });
+
+  const formData = new FormData();
+  formData.append("file", blob, "recording.webm");
+  formData.append("model", modelSelect.value);
+  formData.append("target_language", targetLangSelect.value);
+
+  try {
+    const response = await fetch("/translate-audio", { method: "POST", body: formData });
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+    const transcript = decodeURIComponent(response.headers.get("X-Transcript") || "");
+    const translation = decodeURIComponent(response.headers.get("X-Translation") || "");
+    const language = response.headers.get("X-Detected-Language") || "?";
+    transcriptEl.innerHTML = `<span>Transcript [${language}]:</span> ${transcript}`;
+    translationEl.innerHTML = `<span>Translation [${targetLangSelect.value}]:</span> ${translation}`;
+
+    const outBlob = await response.blob();
+    player.src = URL.createObjectURL(outBlob);
+    player.play();
+    statusEl.textContent = "Done.";
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+}
+</script>
+</body>
+</html>
