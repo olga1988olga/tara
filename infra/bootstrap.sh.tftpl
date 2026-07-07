@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Ubuntu's unattended-upgrades holds the dpkg lock for a while right after
+# boot; wait it out instead of racing it.
+while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+  sleep 5
+done
+
+# Node.js (required by the Claude Code CLI)
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+# ffmpeg (required by openai-whisper to decode non-wav audio formats)
+apt-get install -y ffmpeg
+
+# Claude Code CLI
+npm install -g @anthropic-ai/claude-code
+
+# uv (Python package manager this repo uses)
+sudo -u ubuntu bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+# Clone TARA into the default user's home dir
+sudo -u ubuntu git clone ${tara_repo_url} /home/ubuntu/tara
+
+# Pre-download the model weights (Whisper, Helsinki-NLP translation, Piper
+# voice) so the first real pipeline run doesn't pay for it. Uses `uv run
+# --with` instead of the repo's pyproject.toml, since that file may not yet
+# reflect deps only synced over scp (not committed) at this point.
+cat > /home/ubuntu/tara/warmup_models.py <<'PYEOF'
+import whisper
+whisper.load_model("base")
+
+from transformers import MarianMTModel, MarianTokenizer
+MarianTokenizer.from_pretrained("Helsinki-NLP/opus-mt-de-en")
+MarianMTModel.from_pretrained("Helsinki-NLP/opus-mt-de-en")
+
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id="rhasspy/piper-voices", filename="en/en_US/lessac/medium/en_US-lessac-medium.onnx")
+hf_hub_download(repo_id="rhasspy/piper-voices", filename="en/en_US/lessac/medium/en_US-lessac-medium.onnx.json")
+PYEOF
+chown ubuntu:ubuntu /home/ubuntu/tara/warmup_models.py
+
+sudo -u ubuntu bash -c "cd /home/ubuntu/tara && /home/ubuntu/.local/bin/uv run --python 3.12 --with torch --with openai-whisper --with transformers --with sentencepiece --with piper-tts --with huggingface-hub python warmup_models.py"
+rm /home/ubuntu/tara/warmup_models.py

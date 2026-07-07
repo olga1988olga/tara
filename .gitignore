@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Terraform
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/*.tfvars
+!infra/*.tfvars.example
+
+# Generated test audio
+sample_output.wav

@@ -1,0 +1,15 @@
+# Same main.tf/variables.tf as the default cheap profile - just override
+# instance_type for a real GPU session.
+#
+# Usage:
+#   cp gpu.tfvars.example gpu.tfvars
+#   terraform apply -var-file=gpu.tfvars
+#
+# Before first use: request an EC2 service quota increase for
+# "Running On-Demand G and VT instances" (Service Quotas console) -
+# new accounts default this to 0 vCPUs, so the first apply will fail
+# without it. Also confirm your AWS credits are usable for G-family
+# instances - some credit grants exclude GPU instance types.
+
+instance_type    = "g4dn.xlarge"
+root_volume_size = 80 # more room than the 50GB smoke-test default, for model/dataset caches
